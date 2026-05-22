@@ -3,8 +3,10 @@ import { notFound } from "next/navigation";
 import { ListingGrid } from "@/components/ListingGrid";
 import { PageIntro } from "@/components/PageIntro";
 import { SearchBar } from "@/components/SearchBar";
-import { businesses } from "@/lib/data";
-import { getDictionary, isLocale, localizeBusiness, type Locale } from "@/lib/i18n";
+import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
+import { loadSearchOptions } from "@/lib/loaders";
+import { toBusinessCardData } from "@/lib/presenters";
+import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
   title: "Paidaco Search"
@@ -30,25 +32,58 @@ export default async function SearchPage({ params, searchParams }: SearchPagePro
   const city = search.city ?? "";
   const category = search.category ?? "";
 
-  const results = businesses.filter((business) => {
-    const localized = localizeBusiness(business, locale);
-    const matchesQuery = query
-      ? [business.name, business.dariName, business.pashtoName, localized.area, localized.description]
-          .join(" ")
-          .toLowerCase()
-          .includes(query)
-      : true;
-    const matchesCity = city ? business.city === city : true;
-    const matchesCategory = category ? business.category === category : true;
-    return matchesQuery && matchesCity && matchesCategory;
+  const { cityOptions, categoryOptions } = await loadSearchOptions(locale);
+
+  const results = await prisma.business.findMany({
+    where: {
+      ...(city ? { city: { slug: city } } : {}),
+      ...(category ? { category: { slug: category } } : {}),
+      ...(query
+        ? {
+            OR: [
+              { slug: { contains: query, mode: "insensitive" } },
+              { address: { contains: query, mode: "insensitive" } },
+              {
+                translations: {
+                  some: {
+                    locale,
+                    OR: [
+                      { name: { contains: query, mode: "insensitive" } },
+                      { description: { contains: query, mode: "insensitive" } }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        : {})
+    },
+    include: {
+      city: true,
+      area: true,
+      translations: { where: { locale } },
+      category: { include: { translations: { where: { locale } } } },
+      photos: { orderBy: { sortOrder: "asc" }, take: 1 },
+      reviews: { select: { rating: true } }
+    }
   });
+
+  const listings = results.map((business) => toBusinessCardData(business, locale));
 
   return (
     <>
-      <PageIntro kicker={dictionary.search.kicker} title={dictionary.search.title} body={dictionary.search.body(results.length)} />
+      <PageIntro kicker={dictionary.search.kicker} title={dictionary.search.title} body={dictionary.search.body(listings.length)} />
       <section className="content-section">
-        <SearchBar locale={locale} query={search.q} city={city} category={category} compact />
-        <ListingGrid businesses={results} locale={locale} />
+        <SearchBar
+          locale={locale}
+          query={search.q}
+          city={city}
+          category={category}
+          cities={cityOptions}
+          categories={categoryOptions}
+          compact
+        />
+        <ListingGrid businesses={listings} locale={locale} />
       </section>
     </>
   );

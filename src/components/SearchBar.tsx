@@ -1,11 +1,13 @@
-import { categories, cities } from "@/lib/data";
-import { getDictionary, localePath, localizeCategory, localizeCity, type Locale } from "@/lib/i18n";
+import { getDictionary, localePath, type Locale } from "@/lib/i18n";
+import type { SearchOption } from "@/lib/presenters";
 
 type SearchBarProps = {
   locale: Locale;
   query?: string;
   city?: string;
   category?: string;
+  cities: SearchOption[];
+  categories: SearchOption[];
   compact?: boolean;
   showCategory?: boolean;
 };
@@ -15,6 +17,8 @@ export function SearchBar({
   query = "",
   city = "",
   category = "",
+  cities,
+  categories,
   compact = false,
   showCategory = true
 }: SearchBarProps) {
@@ -32,7 +36,7 @@ export function SearchBar({
           <option value="">{dictionary.search.allAfghanistan}</option>
           {cities.map((item) => (
             <option value={item.slug} key={item.slug}>
-              {localizeCity(item.slug, locale)}
+              {item.label}
             </option>
           ))}
         </select>
@@ -44,7 +48,7 @@ export function SearchBar({
             <option value="">{dictionary.search.allCategories}</option>
             {categories.map((item) => (
               <option value={item.slug} key={item.slug}>
-                {localizeCategory(item.slug, locale)}
+                {item.label}
               </option>
             ))}
           </select>

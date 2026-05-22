@@ -20,31 +20,30 @@ import {
 } from "lucide-react";
 import { SearchBar } from "@/components/SearchBar";
 import { VerifiedBadge } from "@/components/VerifiedBadge";
-import { blogPosts, businesses, cities } from "@/lib/data";
 import {
   getDictionary,
   isLocale,
   localePath,
-  localizeBlogPost,
-  localizeBusiness,
-  localizeCity,
   type Locale
 } from "@/lib/i18n";
+import { loadSearchOptions } from "@/lib/loaders";
+import { getLocalizedName, getTranslation, toBusinessCardData } from "@/lib/presenters";
+import { prisma } from "@/lib/prisma";
 
 type HomeProps = {
   params: Promise<{ locale: string }>;
 };
 
-const categoryLinks = [
-  { slug: "restaurants", icon: Utensils },
-  { slug: "hotels", icon: Bed },
-  { slug: "doctors", icon: HeartPulse },
-  { slug: "mobile-shops", icon: ShoppingBag },
-  { slug: "beauty-salons", icon: Scissors },
-  { slug: "real-estate", icon: Building2 },
-  { slug: "universities", icon: GraduationCap },
-  { slug: "wedding-halls", icon: Heart }
-];
+const categoryIcons: Record<string, typeof Utensils> = {
+  restaurants: Utensils,
+  hotels: Bed,
+  doctors: HeartPulse,
+  "mobile-shops": ShoppingBag,
+  "beauty-salons": Scissors,
+  "real-estate": Building2,
+  universities: GraduationCap,
+  "wedding-halls": Heart
+};
 
 const cityImages: Record<string, string> = {
   kabul: "https://images.unsplash.com/photo-1570213489059-0aac6626cade?auto=format&fit=crop&w=900&q=80",
@@ -135,16 +134,6 @@ const homeCopy = {
   }
 } as const;
 
-const categoryNames: Record<string, Record<Locale, string>> = {
-  restaurants: { fa: "رستورانت‌ها", ps: "رستورانتونه", en: "Restaurants" },
-  hotels: { fa: "هوتل‌ها", ps: "هوټلونه", en: "Hotels" },
-  doctors: { fa: "داکتران", ps: "ډاکتران", en: "Doctors" },
-  "mobile-shops": { fa: "موبایل فروشی", ps: "موبایل پلورنځي", en: "Mobile Shops" },
-  "beauty-salons": { fa: "صالون زیبایی", ps: "سینګار سالونونه", en: "Beauty Salons" },
-  "real-estate": { fa: "عقارات", ps: "جایدادونه", en: "Real Estate" },
-  universities: { fa: "پوهنتون‌ها", ps: "پوهنتونونه", en: "Universities" },
-  "wedding-halls": { fa: "تالارهای عروسی", ps: "د واده تالارونه", en: "Wedding Halls" }
-};
 
 const guideTitles = {
   fa: [
@@ -174,12 +163,73 @@ export default async function LocaleHome({ params }: HomeProps) {
   const locale = rawLocale as Locale;
   const dictionary = getDictionary(locale);
   const copy = homeCopy[locale];
-  const featured = businesses.filter((business) => business.featured);
-  const popular = businesses.slice(0, 5);
-  const cityCards = [
-    ...cities,
-    { slug: "jalalabad", name: "Jalalabad", localName: "جلال‌آباد", count: 96 }
-  ];
+  const { cities: cityRecords, categories: categoryRecords, cityOptions, categoryOptions } = await loadSearchOptions(locale);
+
+  const [cityCounts, categoryCounts, popularRaw, featuredRaw, blogRaw] = await Promise.all([
+    prisma.business.groupBy({
+      by: ["cityId"],
+      _count: { _all: true }
+    }),
+    prisma.business.groupBy({
+      by: ["categoryId"],
+      _count: { _all: true }
+    }),
+    prisma.business.findMany({
+      orderBy: {
+        reviews: {
+          _count: "desc"
+        }
+      },
+      take: 5,
+      include: {
+        city: true,
+        area: true,
+        translations: { where: { locale } },
+        category: { include: { translations: { where: { locale } } } },
+        photos: { orderBy: { sortOrder: "asc" }, take: 1 },
+        reviews: { select: { rating: true } }
+      }
+    }),
+    prisma.business.findMany({
+      where: { featured: true },
+      take: 4,
+      include: {
+        city: true,
+        area: true,
+        translations: { where: { locale } },
+        category: { include: { translations: { where: { locale } } } },
+        photos: { orderBy: { sortOrder: "asc" }, take: 1 },
+        reviews: { select: { rating: true } }
+      }
+    }),
+    prisma.blogPost.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 3,
+      include: { translations: { where: { locale } } }
+    })
+  ]);
+
+  const cityCountMap = new Map(cityCounts.map((item) => [item.cityId, item._count._all]));
+  const categoryCountMap = new Map(categoryCounts.map((item) => [item.categoryId, item._count._all]));
+
+  const cityCards = cityRecords.map((city) => ({
+    slug: city.slug,
+    name: getLocalizedName(locale, city.name, city.localName),
+    count: cityCountMap.get(city.id) ?? 0
+  }));
+
+  const categoryCards = categoryRecords.map((category) => {
+    const localized = getTranslation(category.translations, locale, { name: category.slug, description: null });
+    return {
+      slug: category.slug,
+      label: localized.name,
+      count: categoryCountMap.get(category.id) ?? 0,
+      Icon: categoryIcons[category.slug] ?? Store
+    };
+  });
+
+  const popular = popularRaw.map((business) => toBusinessCardData(business, locale));
+  const featured = featuredRaw.map((business) => toBusinessCardData(business, locale));
   const stats = [
     { value: "10,000+", label: locale === "en" ? "listed businesses" : locale === "ps" ? "ثبت شوي کاروبارونه" : "کسب‌وکار ثبت‌شده" },
     { value: "25+", label: locale === "en" ? "covered cities" : locale === "ps" ? "ښارونه تر پوښښ لاندې" : "شهر تحت پوشش" },
@@ -198,17 +248,20 @@ export default async function LocaleHome({ params }: HomeProps) {
             <p>{copy.subtitle}</p>
           </div>
           <div className="hero-search-block">
-            <SearchBar locale={locale} city="kabul" showCategory={false} />
-              <div className="quick-chips" aria-label={copy.popularCategories}>
-              {categoryLinks.map((category) => {
-                const Icon = category.icon;
-                return (
-                  <Link href={localePath(locale, category.slug === "hotels" || category.slug === "real-estate" || category.slug === "universities" ? `/search?category=${category.slug}` : `/category/${category.slug}`)} key={category.slug}>
-                    <span><Icon size={18} strokeWidth={2.1} /></span>
-                    {categoryNames[category.slug][locale]}
-                  </Link>
-                );
-              })}
+            <SearchBar
+              locale={locale}
+              city="kabul"
+              showCategory={false}
+              cities={cityOptions}
+              categories={categoryOptions}
+            />
+            <div className="quick-chips" aria-label={copy.popularCategories}>
+              {categoryCards.map((category) => (
+                <Link href={localePath(locale, `/category/${category.slug}`)} key={category.slug}>
+                  <span><category.Icon size={18} strokeWidth={2.1} /></span>
+                  {category.label}
+                </Link>
+              ))}
             </div>
           </div>
         </div>
@@ -218,15 +271,15 @@ export default async function LocaleHome({ params }: HomeProps) {
         <SectionHeading title={copy.popular} action={copy.viewAll} href={localePath(locale, "/search")} />
         <div className="popular-strip">
           {popular.map((business) => {
-            const localized = localizeBusiness(business, locale);
+            const imageUrl = business.imageUrl ?? "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80";
             return (
-              <Link className="discovery-card" href={localePath(locale, `/business/${business.city}/${business.slug}`)} key={business.slug}>
-                <img src={business.image} alt="" />
+              <Link className="discovery-card" href={localePath(locale, `/business/${business.citySlug}/${business.slug}`)} key={business.slug}>
+                <img src={imageUrl} alt="" />
                 <span className="save-dot"><Heart size={16} /></span>
                 <span className="rating-pill"><Star size={15} fill="currentColor" /> {business.rating.toFixed(1)}</span>
                 <div>
-                  <strong>{localized.name}</strong>
-                  <small>{localized.category} · {localized.area}</small>
+                  <strong>{business.name}</strong>
+                  <small>{business.category} · {business.area}</small>
                 </div>
               </Link>
             );
@@ -237,15 +290,12 @@ export default async function LocaleHome({ params }: HomeProps) {
       <section className="home-section" id="categories">
         <SectionHeading title={copy.categories} action={copy.viewAll} href={localePath(locale, "/search")} />
         <div className="icon-category-grid">
-          {categoryLinks.map((category) => {
-            const Icon = category.icon;
-            return (
-              <Link className="icon-category-card" href={localePath(locale, category.slug === "hotels" || category.slug === "real-estate" || category.slug === "universities" ? `/search?category=${category.slug}` : `/category/${category.slug}`)} key={category.slug}>
-                <span><Icon size={26} strokeWidth={2} /></span>
-                <strong>{categoryNames[category.slug][locale]}</strong>
-              </Link>
-            );
-          })}
+          {categoryCards.map((category) => (
+            <Link className="icon-category-card" href={localePath(locale, `/category/${category.slug}`)} key={category.slug}>
+              <span><category.Icon size={26} strokeWidth={2} /></span>
+              <strong>{category.label}</strong>
+            </Link>
+          ))}
         </div>
       </section>
 
@@ -255,11 +305,11 @@ export default async function LocaleHome({ params }: HomeProps) {
           {cityCards.map((city) => (
             <Link
               className="city-photo-card"
-              href={localePath(locale, city.slug === "jalalabad" ? "/search?city=jalalabad" : `/city/${city.slug}`)}
+              href={localePath(locale, `/city/${city.slug}`)}
               key={city.slug}
-              style={{ backgroundImage: `url(${cityImages[city.slug]})` }}
+              style={{ backgroundImage: `url(${cityImages[city.slug] ?? cityImages.kabul})` }}
             >
-              <strong>{city.slug === "jalalabad" ? (locale === "en" ? "Jalalabad" : "جلال‌آباد") : localizeCity(city.slug, locale)}</strong>
+              <strong>{city.name}</strong>
               <small>{city.count.toLocaleString("en-US")} {dictionary.common.listings}</small>
             </Link>
           ))}
@@ -270,18 +320,18 @@ export default async function LocaleHome({ params }: HomeProps) {
         <SectionHeading title={copy.featured} action={copy.viewAll} href={localePath(locale, "/search")} />
         <div className="featured-business-grid">
           {featured.map((business) => {
-            const localized = localizeBusiness(business, locale);
+            const imageUrl = business.imageUrl ?? "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80";
             return (
-              <Link className="premium-card" href={localePath(locale, `/business/${business.city}/${business.slug}`)} key={business.slug}>
-                <img src={business.image} alt="" />
+              <Link className="premium-card" href={localePath(locale, `/business/${business.citySlug}/${business.slug}`)} key={business.slug}>
+                <img src={imageUrl} alt="" />
                 <div className="premium-card-body">
                   <h3 className="name-with-badge">
-                    {localized.name}
+                    {business.name}
                     <span className="verified-asset" title={dictionary.common.verified}>
                       <VerifiedBadge label={dictionary.common.verified} size={26} />
                     </span>
                   </h3>
-                  <p>{localized.category} · {localized.area}</p>
+                  <p>{business.category} · {business.area}</p>
                   <div className="premium-actions">
                     <span><Star size={15} fill="currentColor" /> {business.rating.toFixed(1)}</span>
                     <span>{copy.open}</span>
@@ -356,14 +406,14 @@ export default async function LocaleHome({ params }: HomeProps) {
       <section className="home-section">
         <SectionHeading title={copy.blog} action={copy.viewAll} href={localePath(locale, "/blog")} />
         <div className="blog-row">
-          {blogPosts.map((post) => {
-            const localized = localizeBlogPost(post, locale);
+          {blogRaw.map((post) => {
+            const translation = post.translations[0];
             return (
               <Link className="blog-card" href={localePath(locale, `/blog/${post.slug}`)} key={post.slug}>
-                <span>{localized.category}</span>
-                <strong>{localized.title}</strong>
-                <p>{localized.excerpt}</p>
-                <small>{localized.readTime}</small>
+                <span>{post.category}</span>
+                <strong>{translation?.title ?? post.slug}</strong>
+                <p>{translation?.excerpt ?? ""}</p>
+                <small>{post.readTime}</small>
               </Link>
             );
           })}
@@ -380,8 +430,8 @@ export default async function LocaleHome({ params }: HomeProps) {
           </Link>
           <p>{copy.footerBody}</p>
         </div>
-        <FooterColumn title={copy.categories} items={categoryLinks.slice(0, 5).map((category) => categoryNames[category.slug][locale])} />
-        <FooterColumn title={copy.cities} items={cityCards.slice(0, 5).map((city) => (city.slug === "jalalabad" ? (locale === "en" ? "Jalalabad" : "جلال‌آباد") : localizeCity(city.slug, locale)))} />
+        <FooterColumn title={copy.categories} items={categoryCards.slice(0, 5).map((category) => category.label)} />
+        <FooterColumn title={copy.cities} items={cityCards.slice(0, 5).map((city) => city.name)} />
         <FooterColumn title={locale === "en" ? "Links" : locale === "ps" ? "لینکونه" : "لینک‌ها"} items={[dictionary.nav.addBusiness, dictionary.nav.guides, dictionary.nav.claim, locale === "en" ? "Privacy" : locale === "ps" ? "محرمیت" : "حریم خصوصی"]} />
         <div className="newsletter-card">
           <h3>{copy.newsletter}</h3>

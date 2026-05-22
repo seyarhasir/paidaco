@@ -3,15 +3,14 @@ import Link from "next/link";
 import { VerifiedBadge } from "@/components/VerifiedBadge";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { businesses, getBusiness } from "@/lib/data";
 import {
   getDictionary,
   isLocale,
   localePath,
-  localizeBusiness,
-  localizeService,
   type Locale
 } from "@/lib/i18n";
+import { getLocalizedName, getTranslation } from "@/lib/presenters";
+import { prisma } from "@/lib/prisma";
 
 type BusinessPageProps = {
   params: Promise<{
@@ -21,41 +20,46 @@ type BusinessPageProps = {
   }>;
 };
 
-export async function generateStaticParams() {
-  return businesses.flatMap((business) =>
-    (["fa", "ps", "en"] as const).map((locale) => ({
-      locale,
-      city: business.city,
-      slug: business.slug
-    }))
-  );
-}
-
 export async function generateMetadata({ params }: BusinessPageProps): Promise<Metadata> {
   const { locale: rawLocale, city, slug } = await params;
   if (!isLocale(rawLocale)) return {};
 
-  const business = getBusiness(city, slug);
+  const business = await prisma.business.findFirst({
+    where: {
+      slug,
+      city: { slug: city }
+    },
+    include: {
+      city: true,
+      translations: { where: { locale: rawLocale as Locale } },
+      photos: { orderBy: { sortOrder: "asc" }, take: 1 }
+    }
+  });
   if (!business) return {};
 
   const locale = rawLocale as Locale;
-  const localized = localizeBusiness(business, locale);
+  const localized = getTranslation(business.translations, locale, {
+    name: business.slug,
+    description: ""
+  });
+  const imageUrl = business.photos[0]?.url ?? "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80";
+  const cityName = getLocalizedName(locale, business.city.name, business.city.localName);
 
   return {
-    title: `${localized.name} - ${localized.area}`,
-    description: `${localized.description} ${localized.address}. ${business.phone}.`,
+    title: `${localized.name} - ${cityName}`,
+    description: `${localized.description} ${business.address}. ${business.phone ?? ""}`.trim(),
     alternates: {
-      canonical: localePath(locale, `/business/${business.city}/${business.slug}`),
+      canonical: localePath(locale, `/business/${business.city.slug}/${business.slug}`),
       languages: {
-        fa: localePath("fa", `/business/${business.city}/${business.slug}`),
-        ps: localePath("ps", `/business/${business.city}/${business.slug}`),
-        en: localePath("en", `/business/${business.city}/${business.slug}`)
+        fa: localePath("fa", `/business/${business.city.slug}/${business.slug}`),
+        ps: localePath("ps", `/business/${business.city.slug}/${business.slug}`),
+        en: localePath("en", `/business/${business.city.slug}/${business.slug}`)
       }
     },
     openGraph: {
       title: localized.name,
       description: localized.description,
-      images: [business.image],
+      images: [imageUrl],
       type: "website"
     }
   };
@@ -66,41 +70,67 @@ export default async function BusinessPage({ params }: BusinessPageProps) {
   if (!isLocale(rawLocale)) notFound();
 
   const locale = rawLocale as Locale;
-  const business = getBusiness(city, slug);
+  const business = await prisma.business.findFirst({
+    where: {
+      slug,
+      city: { slug: city }
+    },
+    include: {
+      city: true,
+      area: true,
+      translations: { where: { locale } },
+      category: { include: { translations: { where: { locale } } } },
+      photos: { orderBy: { sortOrder: "asc" }, take: 1 },
+      services: { where: { locale } },
+      reviews: { where: { approved: true }, select: { rating: true } }
+    }
+  });
   if (!business) notFound();
 
   const dictionary = getDictionary(locale);
-  const localized = localizeBusiness(business, locale);
+  const localized = getTranslation(business.translations, locale, {
+    name: business.slug,
+    description: ""
+  });
+  const categoryName = getTranslation(business.category.translations, locale, {
+    name: business.category.slug,
+    description: null
+  }).name;
+  const areaName = business.area
+    ? getLocalizedName(locale, business.area.name, business.area.localName)
+    : locale === "en"
+      ? "City center"
+      : "مرکز شهر";
+  const imageUrl = business.photos[0]?.url ?? "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80";
+  const reviewCount = business.reviews.length;
+  const rating = reviewCount
+    ? business.reviews.reduce((total, review) => total + review.rating, 0) / reviewCount
+    : 0;
   const reviewSummary =
     locale === "en"
-      ? `Based on ${business.reviewCount} local reviews.`
+      ? `Based on ${reviewCount} local reviews.`
       : locale === "ps"
-        ? `د ${business.reviewCount} ځایي نظرونو پر بنسټ.`
-        : `بر اساس ${business.reviewCount} نظر محلی.`;
+        ? `د ${reviewCount} ځایي نظرونو پر بنسټ.`
+        : `بر اساس ${reviewCount} نظر محلی.`;
 
   const schema = {
     "@context": "https://schema.org",
     "@type": "LocalBusiness",
     name: localized.name,
-    alternateName: [business.dariName, business.pashtoName, business.name],
-    image: business.image,
+    alternateName: localized.name,
+    image: imageUrl,
     address: {
       "@type": "PostalAddress",
-      streetAddress: localized.address,
-      addressLocality: business.city,
+      streetAddress: business.address,
+      addressLocality: business.city.slug,
       addressCountry: "AF"
     },
-    geo: {
-      "@type": "GeoCoordinates",
-      latitude: business.coordinates.lat,
-      longitude: business.coordinates.lng
-    },
-    telephone: business.phone,
-    priceRange: business.priceRange,
+    telephone: business.phone ?? undefined,
+    priceRange: business.priceRange ?? undefined,
     aggregateRating: {
       "@type": "AggregateRating",
-      ratingValue: business.rating,
-      reviewCount: business.reviewCount
+      ratingValue: rating,
+      reviewCount
     }
   };
 
@@ -114,10 +144,10 @@ export default async function BusinessPage({ params }: BusinessPageProps) {
       />
       <section className="business-hero">
         <div className="business-hero-image">
-          <Image src={business.image} alt="" fill priority sizes="100vw" />
+          <Image src={imageUrl} alt="" fill priority sizes="100vw" />
         </div>
         <div className="business-hero-content">
-          <p className="eyebrow">{localized.category} · {localized.area}</p>
+          <p className="eyebrow">{categoryName} · {areaName}</p>
           <h1 className="name-with-badge hero-title-with-badge">
             {localized.name}
             {business.verified ? (
@@ -127,13 +157,15 @@ export default async function BusinessPage({ params }: BusinessPageProps) {
             ) : null}
           </h1>
           <div className="meta-row">
-            <span>{business.rating.toFixed(1)} ★</span>
-            <span>{business.reviewCount} {dictionary.common.reviews}</span>
-            <span>{business.priceRange}</span>
+            <span>{rating.toFixed(1)} ★</span>
+            <span>{reviewCount} {dictionary.common.reviews}</span>
+            {business.priceRange ? <span>{business.priceRange}</span> : null}
           </div>
           <div className="actions-row prominent">
-            <a href={`tel:${business.phone}`}>{dictionary.common.call}</a>
-            <a href={`https://wa.me/${business.whatsapp.replace("+", "")}`}>{dictionary.common.whatsapp}</a>
+            {business.phone ? <a href={`tel:${business.phone}`}>{dictionary.common.call}</a> : null}
+            {business.whatsapp ? (
+              <a href={`https://wa.me/${business.whatsapp.replace("+", "")}`}>{dictionary.common.whatsapp}</a>
+            ) : null}
             <Link href={localePath(locale, "/claim-business")}>{dictionary.common.claimBusiness}</Link>
           </div>
         </div>
@@ -148,9 +180,11 @@ export default async function BusinessPage({ params }: BusinessPageProps) {
           <section>
             <h2>{dictionary.common.services}</h2>
             <div className="service-list">
-              {business.services.map((service) => (
-                <span key={service}>{localizeService(service, locale)}</span>
-              ))}
+              {business.services.length ? (
+                business.services.map((service) => <span key={service.id}>{service.name}</span>)
+              ) : (
+                <span>{dictionary.common.services}</span>
+              )}
             </div>
           </section>
           <section>
@@ -166,19 +200,21 @@ export default async function BusinessPage({ params }: BusinessPageProps) {
           <dl>
             <div>
               <dt>{dictionary.common.address}</dt>
-              <dd>{localized.address}</dd>
+              <dd>{business.address}</dd>
             </div>
             <div>
               <dt>{dictionary.common.hours}</dt>
-              <dd>{business.hours}</dd>
+              <dd>{locale === "en" ? "Hours coming soon" : locale === "ps" ? "د ساعتونو معلومات ژر راځي" : "ساعات به‌زودی"}</dd>
             </div>
             <div>
               <dt>{dictionary.common.phone}</dt>
-              <dd>{business.phone}</dd>
+              <dd>{business.phone ?? "-"}</dd>
             </div>
           </dl>
           <div className="map-panel">
-            <span>{business.coordinates.lat.toFixed(4)}, {business.coordinates.lng.toFixed(4)}</span>
+            <span>
+              {business.latitude ? Number(business.latitude).toFixed(4) : "0.0000"}, {business.longitude ? Number(business.longitude).toFixed(4) : "0.0000"}
+            </span>
           </div>
         </aside>
       </section>

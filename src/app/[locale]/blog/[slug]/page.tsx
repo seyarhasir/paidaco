@@ -1,8 +1,9 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { blogPosts, businesses } from "@/lib/data";
-import { getDictionary, isLocale, localePath, localizeBlogPost, localizeBusiness, type Locale } from "@/lib/i18n";
+import { getDictionary, isLocale, localePath, type Locale } from "@/lib/i18n";
+import { toBusinessCardData } from "@/lib/presenters";
+import { prisma } from "@/lib/prisma";
 
 type BlogPostPageProps = {
   params: Promise<{ locale: string; slug: string }>;
@@ -18,17 +19,45 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
 
   const locale = rawLocale as Locale;
   const dictionary = getDictionary(locale);
-  const post = blogPosts.find((item) => item.slug === slug);
+  const post = await prisma.blogPost.findUnique({
+    where: { slug },
+    include: {
+      translations: { where: { locale } }
+    }
+  });
   if (!post) notFound();
-  const localizedPost = localizeBlogPost(post, locale);
+  const translation = post.translations[0];
 
-  const related = businesses.filter((business) => business.categoryLabel === post.category).slice(0, 3);
+  const normalizedCategory = post.category
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)+/g, "");
+
+  const relatedBusinesses = await prisma.business.findMany({
+    where: normalizedCategory
+      ? {
+          category: {
+            slug: normalizedCategory
+          }
+        }
+      : {},
+    take: 3,
+    include: {
+      city: true,
+      area: true,
+      translations: { where: { locale } },
+      category: { include: { translations: { where: { locale } } } },
+      photos: { orderBy: { sortOrder: "asc" }, take: 1 },
+      reviews: { select: { rating: true } }
+    }
+  });
+  const related = relatedBusinesses.map((business) => toBusinessCardData(business, locale));
 
   return (
     <article className="article-page">
       <p className="eyebrow">{dictionary.nav.guides}</p>
-      <h1>{localizedPost.title}</h1>
-      <p className="article-lede">{localizedPost.excerpt}</p>
+      <h1>{translation?.title ?? post.slug}</h1>
+      <p className="article-lede">{translation?.excerpt ?? ""}</p>
       <div className="article-body">
         <p>
           {locale === "en"
@@ -42,10 +71,9 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
         <div className="related-links">
           <h2>{dictionary.common.relatedListings}</h2>
           {related.map((business) => {
-            const localized = localizeBusiness(business, locale);
             return (
-              <Link href={localePath(locale, `/business/${business.city}/${business.slug}`)} key={business.slug}>
-                {localized.name} · {localized.area}
+              <Link href={localePath(locale, `/business/${business.citySlug}/${business.slug}`)} key={business.slug}>
+                {business.name} · {business.area}
               </Link>
             );
           })}

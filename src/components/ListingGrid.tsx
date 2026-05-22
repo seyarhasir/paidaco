@@ -1,8 +1,7 @@
-import { BusinessCard } from "@/components/BusinessCard";
-import type { Business } from "@/lib/data";
+import { BusinessCard, type ListingBusiness } from "@/components/BusinessCard";
 import { type Locale } from "@/lib/i18n";
 
-export function ListingGrid({ businesses, locale }: { businesses: Business[]; locale: Locale }) {
+export function ListingGrid({ businesses, locale }: { businesses: ListingBusiness[]; locale: Locale }) {
   if (!businesses.length) {
     return (
       <div className="empty-state">
@@ -15,7 +14,7 @@ export function ListingGrid({ businesses, locale }: { businesses: Business[]; lo
   return (
     <div className="listing-grid">
       {businesses.map((business) => (
-        <BusinessCard business={business} locale={locale} key={`${business.city}-${business.slug}`} />
+        <BusinessCard business={business} locale={locale} key={`${business.citySlug}-${business.slug}`} />
       ))}
     </div>
   );

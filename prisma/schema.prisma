@@ -200,6 +200,32 @@ model CategoryTranslation {
   @@map("category_translations")
 }
 
+model BlogPost {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  category  String
+  readTime  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  translations BlogPostTranslation[]
+
+  @@map("blog_posts")
+}
+
+model BlogPostTranslation {
+  id         String @id @default(cuid())
+  postId     String
+  locale     Locale
+  title      String
+  excerpt    String
+
+  post BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, locale])
+  @@map("blog_post_translations")
+}
+
 model Business {
   id          String         @id @default(cuid())
   slug        String

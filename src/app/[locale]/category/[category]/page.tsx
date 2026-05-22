@@ -3,8 +3,10 @@ import { notFound } from "next/navigation";
 import { ListingGrid } from "@/components/ListingGrid";
 import { PageIntro } from "@/components/PageIntro";
 import { SearchBar } from "@/components/SearchBar";
-import { businesses, getCategory } from "@/lib/data";
-import { getDictionary, isLocale, localizeCategory, type Locale } from "@/lib/i18n";
+import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
+import { loadSearchOptions } from "@/lib/loaders";
+import { getTranslation, toBusinessCardData } from "@/lib/presenters";
+import { prisma } from "@/lib/prisma";
 
 type CategoryPageProps = {
   params: Promise<{ locale: string; category: string }>;
@@ -19,19 +21,40 @@ export default async function CategoryPage({ params }: CategoryPageProps) {
   if (!isLocale(rawLocale)) notFound();
 
   const locale = rawLocale as Locale;
-  const category = getCategory(categorySlug);
+  const category = await prisma.category.findUnique({
+    where: { slug: categorySlug },
+    include: { translations: { where: { locale } } }
+  });
   if (!category) notFound();
 
   const dictionary = getDictionary(locale);
-  const categoryName = localizeCategory(category.slug, locale);
-  const categoryBusinesses = businesses.filter((business) => business.category === category.slug);
+  const categoryName = getTranslation(category.translations, locale, { name: category.slug }).name;
+  const { cityOptions, categoryOptions } = await loadSearchOptions(locale);
+  const results = await prisma.business.findMany({
+    where: { category: { slug: category.slug } },
+    include: {
+      city: true,
+      area: true,
+      translations: { where: { locale } },
+      category: { include: { translations: { where: { locale } } } },
+      photos: { orderBy: { sortOrder: "asc" }, take: 1 },
+      reviews: { select: { rating: true } }
+    }
+  });
+  const listings = results.map((business) => toBusinessCardData(business, locale));
 
   return (
     <>
-      <PageIntro kicker={categoryName} title={categoryName} body={dictionary.search.body(categoryBusinesses.length)} />
+      <PageIntro kicker={categoryName} title={categoryName} body={dictionary.search.body(listings.length)} />
       <section className="content-section">
-        <SearchBar locale={locale} category={category.slug} compact />
-        <ListingGrid businesses={categoryBusinesses} locale={locale} />
+        <SearchBar
+          locale={locale}
+          category={category.slug}
+          cities={cityOptions}
+          categories={categoryOptions}
+          compact
+        />
+        <ListingGrid businesses={listings} locale={locale} />
       </section>
     </>
   );
