@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { Header } from "@/components/Header";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/auth/session";
 import { getDirection, getDictionary, isLocale, locales, type Locale } from "@/lib/i18n";
 
 type LocaleLayoutProps = {
@@ -53,10 +53,7 @@ export default async function LocaleLayout({ children, params }: LocaleLayoutPro
   if (!isLocale(rawLocale)) notFound();
 
   const locale = rawLocale as Locale;
-  const supabase = await createClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser("locale layout auth");
 
   return (
     <div className={`locale-shell locale-${locale}`} lang={locale} dir={getDirection(locale)}>

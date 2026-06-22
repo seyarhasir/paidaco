@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { loginAction } from "@/lib/auth/actions";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/auth/session";
 import { getDirection, isLocale, localePath, type Locale } from "@/lib/i18n";
 
 type LoginPageProps = {
@@ -47,10 +47,7 @@ export default async function LoginPage({ params, searchParams }: LoginPageProps
   if (!isLocale(rawLocale)) redirect("/fa/login");
 
   const locale = rawLocale as Locale;
-  const supabase = await createClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser("login page auth");
   if (user) redirect(localePath(locale, "/dashboard"));
 
   const search = (await searchParams) ?? {};

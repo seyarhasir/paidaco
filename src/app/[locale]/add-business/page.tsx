@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { AddBusinessForm } from "@/components/AddBusinessForm";
 import { PageIntro } from "@/components/PageIntro";
 import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
 import { loadSearchOptions } from "@/lib/loaders";
@@ -24,53 +25,7 @@ export default async function AddBusinessPage({ params }: AddBusinessPageProps) 
     <>
       <PageIntro kicker={dictionary.nav.addBusiness} title={dictionary.pages.addTitle} body={dictionary.pages.addBody} />
       <section className="form-section">
-        <form className="directory-form">
-          <label>
-            <span>{locale === "en" ? "Business name" : locale === "ps" ? "د سوداګرۍ نوم" : "نام کسب‌وکار"}</span>
-            <input placeholder={locale === "en" ? "Example: Ahmad Mobile Store" : locale === "ps" ? "بېلګه: احمد موبایل پلورنځی" : "نمونه: موبایل فروشی احمد"} />
-          </label>
-          <div className="form-grid">
-            <label>
-              <span>{dictionary.search.city}</span>
-              <select>
-                {cityOptions.map((city) => (
-                  <option key={city.slug} value={city.slug}>
-                    {city.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>{dictionary.search.category}</span>
-              <select>
-                {categoryOptions.map((category) => (
-                  <option key={category.slug} value={category.slug}>
-                    {category.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <label>
-            <span>{dictionary.common.address}</span>
-            <input placeholder={locale === "en" ? "Area, street, landmark" : locale === "ps" ? "سیمه، سړک، نښه" : "ناحیه، سرک، نشانۀ نزدیک"} />
-          </label>
-          <div className="form-grid">
-            <label>
-              <span>{dictionary.common.phone}</span>
-              <input placeholder="+93..." />
-            </label>
-            <label>
-              <span>{dictionary.common.whatsapp}</span>
-              <input placeholder="+93..." />
-            </label>
-          </div>
-          <label>
-            <span>{dictionary.common.services}</span>
-            <textarea placeholder={locale === "en" ? "Repairs, delivery, booking, quotes..." : locale === "ps" ? "ترمیم، رسونه، وخت اخیستل، بیه غوښتل..." : "ترمیم، ارسال، گرفتن وقت، درخواست قیمت..."} />
-          </label>
-          <button type="button">{locale === "en" ? "Submit for review" : locale === "ps" ? "د کتنې لپاره ولېږئ" : "برای بررسی بفرستید"}</button>
-        </form>
+        <AddBusinessForm locale={locale} cities={cityOptions} categories={categoryOptions} />
       </section>
     </>
   );

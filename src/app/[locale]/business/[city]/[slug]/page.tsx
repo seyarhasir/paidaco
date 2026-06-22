@@ -1,8 +1,11 @@
 import Image from "next/image";
 import Link from "next/link";
+import { BusinessMap } from "@/components/BusinessMap";
 import { VerifiedBadge } from "@/components/VerifiedBadge";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { getBusiness as getDemoBusiness, getCity as getDemoCity } from "@/lib/data";
+import { isRetryableDependencyError, logDependencyFallback } from "@/lib/dependency-errors";
 import {
   getDictionary,
   isLocale,
@@ -24,20 +27,29 @@ export async function generateMetadata({ params }: BusinessPageProps): Promise<M
   const { locale: rawLocale, city, slug } = await params;
   if (!isLocale(rawLocale)) return {};
 
-  const business = await prisma.business.findFirst({
-    where: {
-      slug,
-      city: { slug: city }
-    },
-    include: {
-      city: true,
-      translations: { where: { locale: rawLocale as Locale } },
-      photos: { orderBy: { sortOrder: "asc" }, take: 1 }
-    }
-  });
+  const locale = rawLocale as Locale;
+  let business = null;
+
+  try {
+    business = await prisma.business.findFirst({
+      where: {
+        slug,
+        city: { slug: city }
+      },
+      include: {
+        city: true,
+        translations: { where: { locale } },
+        photos: { orderBy: { sortOrder: "asc" }, take: 1 }
+      }
+    });
+  } catch (error) {
+    if (!isRetryableDependencyError(error)) throw error;
+    logDependencyFallback("business metadata", error);
+    business = toDemoBusiness(city, slug, locale);
+  }
+
   if (!business) return {};
 
-  const locale = rawLocale as Locale;
   const localized = getTranslation(business.translations, locale, {
     name: business.slug,
     description: ""
@@ -70,21 +82,30 @@ export default async function BusinessPage({ params }: BusinessPageProps) {
   if (!isLocale(rawLocale)) notFound();
 
   const locale = rawLocale as Locale;
-  const business = await prisma.business.findFirst({
-    where: {
-      slug,
-      city: { slug: city }
-    },
-    include: {
-      city: true,
-      area: true,
-      translations: { where: { locale } },
-      category: { include: { translations: { where: { locale } } } },
-      photos: { orderBy: { sortOrder: "asc" }, take: 1 },
-      services: { where: { locale } },
-      reviews: { where: { approved: true }, select: { rating: true } }
-    }
-  });
+  let business = null;
+
+  try {
+    business = await prisma.business.findFirst({
+      where: {
+        slug,
+        city: { slug: city }
+      },
+      include: {
+        city: true,
+        area: true,
+        translations: { where: { locale } },
+        category: { include: { translations: { where: { locale } } } },
+        photos: { orderBy: { sortOrder: "asc" }, take: 1 },
+        services: { where: { locale } },
+        reviews: { where: { approved: true }, select: { rating: true } }
+      }
+    });
+  } catch (error) {
+    if (!isRetryableDependencyError(error)) throw error;
+    logDependencyFallback("business profile", error);
+    business = toDemoBusiness(city, slug, locale);
+  }
+
   if (!business) notFound();
 
   const dictionary = getDictionary(locale);
@@ -102,8 +123,10 @@ export default async function BusinessPage({ params }: BusinessPageProps) {
       ? "City center"
       : "مرکز شهر";
   const imageUrl = business.photos[0]?.url ?? "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80";
-  const reviewCount = business.reviews.length;
-  const rating = reviewCount
+  const reviewCount = "reviewCount" in business ? business.reviewCount : business.reviews.length;
+  const rating = "rating" in business
+    ? business.rating
+    : reviewCount
     ? business.reviews.reduce((total, review) => total + review.rating, 0) / reviewCount
     : 0;
   const reviewSummary =
@@ -112,6 +135,8 @@ export default async function BusinessPage({ params }: BusinessPageProps) {
       : locale === "ps"
         ? `د ${reviewCount} ځایي نظرونو پر بنسټ.`
         : `بر اساس ${reviewCount} نظر محلی.`;
+  const latitude = business.latitude ? Number(business.latitude) : null;
+  const longitude = business.longitude ? Number(business.longitude) : null;
 
   const schema = {
     "@context": "https://schema.org",
@@ -127,6 +152,14 @@ export default async function BusinessPage({ params }: BusinessPageProps) {
     },
     telephone: business.phone ?? undefined,
     priceRange: business.priceRange ?? undefined,
+    geo:
+      latitude !== null && longitude !== null
+        ? {
+            "@type": "GeoCoordinates",
+            latitude,
+            longitude
+          }
+        : undefined,
     aggregateRating: {
       "@type": "AggregateRating",
       ratingValue: rating,
@@ -190,7 +223,7 @@ export default async function BusinessPage({ params }: BusinessPageProps) {
           <section>
             <h2>{dictionary.common.reviews}</h2>
             <div className="review-card">
-              <strong>{business.rating.toFixed(1)} ★</strong>
+              <strong>{rating.toFixed(1)} ★</strong>
               <p>{reviewSummary}</p>
             </div>
           </section>
@@ -211,13 +244,74 @@ export default async function BusinessPage({ params }: BusinessPageProps) {
               <dd>{business.phone ?? "-"}</dd>
             </div>
           </dl>
-          <div className="map-panel">
-            <span>
-              {business.latitude ? Number(business.latitude).toFixed(4) : "0.0000"}, {business.longitude ? Number(business.longitude).toFixed(4) : "0.0000"}
-            </span>
-          </div>
+          <BusinessMap
+            latitude={latitude}
+            longitude={longitude}
+            name={localized.name}
+            address={business.address}
+            locale={locale}
+          />
         </aside>
       </section>
     </>
   );
+}
+
+function toDemoBusiness(citySlug: string, slug: string, locale: Locale) {
+  const demo = getDemoBusiness(citySlug, slug);
+  if (!demo) return null;
+
+  const city = getDemoCity(demo.city) ?? {
+    slug: demo.city,
+    name: demo.city,
+    localName: demo.city
+  };
+  const localizedName = locale === "en" ? demo.name : locale === "ps" ? demo.pashtoName : demo.dariName;
+
+  return {
+    id: `demo-${demo.city}-${demo.slug}`,
+    slug: demo.slug,
+    phone: demo.phone,
+    whatsapp: demo.whatsapp,
+    address: demo.address,
+    latitude: demo.coordinates.lat,
+    longitude: demo.coordinates.lng,
+    priceRange: demo.priceRange,
+    verified: demo.verified,
+    featured: demo.featured,
+    city,
+    area: {
+      name: demo.area,
+      localName: demo.area
+    },
+    category: {
+      slug: demo.category,
+      translations: [
+        {
+          locale,
+          name: demo.categoryLabel,
+          description: null
+        }
+      ]
+    },
+    translations: [
+      {
+        locale,
+        name: localizedName,
+        description: demo.description
+      }
+    ],
+    photos: [
+      {
+        url: demo.image
+      }
+    ],
+    services: demo.services.map((service, index) => ({
+      id: `demo-service-${index}`,
+      name: service
+    })),
+    reviews: [],
+    rating: demo.rating,
+    reviewCount: demo.reviewCount
+  };
 }

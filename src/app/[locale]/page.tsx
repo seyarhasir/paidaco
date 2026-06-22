@@ -29,6 +29,7 @@ import {
 import { loadSearchOptions } from "@/lib/loaders";
 import { getLocalizedName, getTranslation, toBusinessCardData } from "@/lib/presenters";
 import { prisma } from "@/lib/prisma";
+import { isRetryableDependencyError, logDependencyFallback } from "@/lib/dependency-errors";
 
 type HomeProps = {
   params: Promise<{ locale: string }>;
@@ -156,6 +157,69 @@ const guideTitles = {
   ]
 } as const;
 
+async function loadHomeSections(locale: Locale) {
+  try {
+    const [cityCounts, categoryCounts, popularRaw, featuredRaw, blogRaw] = await Promise.all([
+      prisma.business.groupBy({
+        by: ["cityId"],
+        _count: { _all: true }
+      }),
+      prisma.business.groupBy({
+        by: ["categoryId"],
+        _count: { _all: true }
+      }),
+      prisma.business.findMany({
+        orderBy: {
+          reviews: {
+            _count: "desc"
+          }
+        },
+        take: 5,
+        include: {
+          city: true,
+          area: true,
+          translations: { where: { locale } },
+          category: { include: { translations: { where: { locale } } } },
+          photos: { orderBy: { sortOrder: "asc" }, take: 1 },
+          reviews: { select: { rating: true } }
+        }
+      }),
+      prisma.business.findMany({
+        where: { featured: true },
+        take: 4,
+        include: {
+          city: true,
+          area: true,
+          translations: { where: { locale } },
+          category: { include: { translations: { where: { locale } } } },
+          photos: { orderBy: { sortOrder: "asc" }, take: 1 },
+          reviews: { select: { rating: true } }
+        }
+      }),
+      prisma.blogPost.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 3,
+        include: { translations: { where: { locale } } }
+      })
+    ]);
+
+    return { cityCounts, categoryCounts, popularRaw, featuredRaw, blogRaw };
+  } catch (error) {
+    if (isRetryableDependencyError(error)) {
+      logDependencyFallback("loadHomeSections", error);
+      return {
+        cityCounts: [],
+        categoryCounts: [],
+        popularRaw: [],
+        featuredRaw: [],
+        blogRaw: []
+      };
+    }
+
+    throw error;
+  }
+}
+
 export default async function LocaleHome({ params }: HomeProps) {
   const { locale: rawLocale } = await params;
   if (!isLocale(rawLocale)) notFound();
@@ -164,50 +228,7 @@ export default async function LocaleHome({ params }: HomeProps) {
   const dictionary = getDictionary(locale);
   const copy = homeCopy[locale];
   const { cities: cityRecords, categories: categoryRecords, cityOptions, categoryOptions } = await loadSearchOptions(locale);
-
-  const [cityCounts, categoryCounts, popularRaw, featuredRaw, blogRaw] = await Promise.all([
-    prisma.business.groupBy({
-      by: ["cityId"],
-      _count: { _all: true }
-    }),
-    prisma.business.groupBy({
-      by: ["categoryId"],
-      _count: { _all: true }
-    }),
-    prisma.business.findMany({
-      orderBy: {
-        reviews: {
-          _count: "desc"
-        }
-      },
-      take: 5,
-      include: {
-        city: true,
-        area: true,
-        translations: { where: { locale } },
-        category: { include: { translations: { where: { locale } } } },
-        photos: { orderBy: { sortOrder: "asc" }, take: 1 },
-        reviews: { select: { rating: true } }
-      }
-    }),
-    prisma.business.findMany({
-      where: { featured: true },
-      take: 4,
-      include: {
-        city: true,
-        area: true,
-        translations: { where: { locale } },
-        category: { include: { translations: { where: { locale } } } },
-        photos: { orderBy: { sortOrder: "asc" }, take: 1 },
-        reviews: { select: { rating: true } }
-      }
-    }),
-    prisma.blogPost.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 3,
-      include: { translations: { where: { locale } } }
-    })
-  ]);
+  const { cityCounts, categoryCounts, popularRaw, featuredRaw, blogRaw } = await loadHomeSections(locale);
 
   const cityCountMap = new Map(cityCounts.map((item) => [item.cityId, item._count._all]));
   const categoryCountMap = new Map(categoryCounts.map((item) => [item.categoryId, item._count._all]));

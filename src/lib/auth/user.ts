@@ -32,7 +32,30 @@ export async function syncAuthUser(user: SupabaseUser) {
     }
   });
 
-  await assignRole(profile.id, "user");
+  const userRoles = await prisma.userRole.findMany({
+    where: { userId: profile.id },
+    include: { role: true }
+  });
+
+  const roleKeys = userRoles.map((ur) => ur.role.key);
+
+  if (roleKeys.length === 0) {
+    await assignRole(profile.id, "user");
+  } else if (roleKeys.includes("admin") || roleKeys.includes("editor") || roleKeys.includes("moderator")) {
+    if (roleKeys.includes("user")) {
+      const userRoleRecord = userRoles.find((ur) => ur.role.key === "user");
+      if (userRoleRecord) {
+        await prisma.userRole.delete({
+          where: {
+            userId_roleId: {
+              userId: profile.id,
+              roleId: userRoleRecord.roleId
+            }
+          }
+        });
+      }
+    }
+  }
 
   return profile;
 }

@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { isRetryableDependencyError, logDependencyFallback } from "@/lib/dependency-errors";
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({
@@ -25,7 +26,12 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  await supabase.auth.getUser();
+  try {
+    await supabase.auth.getUser();
+  } catch (error) {
+    if (!isRetryableDependencyError(error)) throw error;
+    logDependencyFallback("middleware auth refresh", error);
+  }
 
   return response;
 }
